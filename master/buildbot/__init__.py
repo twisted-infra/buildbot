@@ -33,7 +33,7 @@ except IOError:
     VERSION_MATCH = re.compile(r'\d+\.\d+\.\d+(\w|-)*')
 
     try:
-        p = Popen(['git', 'describe', '--tags', '--always'], stdout=PIPE, stderr=STDOUT)
+        p = Popen(['git', 'describe', '--tags'], stdout=PIPE, stderr=STDOUT)
         out = p.communicate()[0]
 
         if (not p.returncode) and out:
