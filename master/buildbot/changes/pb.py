@@ -87,10 +87,7 @@ class ChangePerspective(NewCredPerspective):
 
         if not files:
             log.msg("No files listed in change... bit strange, but not fatal.")
-
-        if changedict.has_key('links'):
-            log.msg("Found links: "+repr(changedict['links']))
-            del changedict['links']
+            return
 
         d = self.master.addChange(**changedict)
         # since this is a remote method, we can't return a Change instance, so
