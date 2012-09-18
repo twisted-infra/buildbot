@@ -50,7 +50,8 @@ class BaseBasicScheduler(base.BaseScheduler):
         base.BaseScheduler.__init__(self, name, builderNames, properties)
 
         self.treeStableTimer = treeStableTimer
-        self.fileIsImportant = fileIsImportant
+        if fileIsImportant:
+            self.fileIsImportant = fileIsImportant
         self.onlyImportant = onlyImportant
         self.change_filter = self.getChangeFilter(branch=branch,
                 branches=branches, change_filter=change_filter,
