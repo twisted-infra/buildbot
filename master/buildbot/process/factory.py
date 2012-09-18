@@ -13,10 +13,6 @@
 #
 # Copyright Buildbot Team Members
 
-import warnings
-
-from twisted.python import deprecate, versions
-
 from buildbot import util
 from buildbot.process.build import Build
 from buildbot.process.buildstep import BuildStep
@@ -24,7 +20,6 @@ from buildbot.steps.source import CVS, SVN
 from buildbot.steps.shell import Configure, Compile, Test, PerlModuleTest
 
 # deprecated, use BuildFactory.addStep
-@deprecate.deprecated(versions.Version("buildbot", 0, 8, 6))
 def s(steptype, **kwargs):
     # convenience function for master.cfg files, to create step
     # specification tuples
@@ -61,10 +56,6 @@ class BuildFactory(util.ComparableMixin):
     def _makeStepFactory(self, step_or_factory):
         if isinstance(step_or_factory, BuildStep):
             return step_or_factory.getStepFactory()
-        warnings.warn(
-                "Passing a BuildStep subclass to factory.addStep is deprecated.  " +
-                "Please pass a BuildStep instance instead.  Support will be dropped in v0.8.7.",
-                    DeprecationWarning, stacklevel=3)
         return step_or_factory
 
     def newBuild(self, requests):
@@ -87,11 +78,6 @@ class BuildFactory(util.ComparableMixin):
         elif type(step_or_factory) == type(BuildStep) and \
                 issubclass(step_or_factory, BuildStep):
             s = (step_or_factory, dict(kwargs))
-            warnings.warn(
-                    "Passing a BuildStep subclass to factory.addStep is deprecated.  " +
-                    "Please pass a BuildStep instance instead.  Support will be dropped in v0.8.7.",
-                    DeprecationWarning, stacklevel=2)
-
         else:
             raise ValueError('%r is not a BuildStep nor BuildStep subclass' % step_or_factory)
         self.steps.append(s)
