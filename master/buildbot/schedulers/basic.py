@@ -34,6 +34,8 @@ class BaseBasicScheduler(base.BaseScheduler):
 
     _reactor = reactor # for tests
 
+    fileIsImportant = None
+
     class NotSet: pass
     def __init__(self, name, shouldntBeSet=NotSet, treeStableTimer=None,
                 builderNames=None, branch=NotABranch, branches=NotABranch,
@@ -50,7 +52,7 @@ class BaseBasicScheduler(base.BaseScheduler):
         base.BaseScheduler.__init__(self, name, builderNames, properties)
 
         self.treeStableTimer = treeStableTimer
-        if fileIsImportant:
+        if fileIsImportant is not None:
             self.fileIsImportant = fileIsImportant
         self.onlyImportant = onlyImportant
         self.change_filter = self.getChangeFilter(branch=branch,
