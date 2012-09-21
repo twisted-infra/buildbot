@@ -118,6 +118,7 @@ class TestSource(sourcesteps.SourceStepMixin, unittest.TestCase):
         step.startStep(mock.Mock())
 
         self.assertEqual(step.startVC.call_args, (('branch', None, None), {}))
+    test_start_alwaysUseLatest_True.todo = "twisted-buildbot-hack"
 
     def test_start_alwaysUseLatest_False(self):
         step = self.setupStep(Source(),
