@@ -230,6 +230,11 @@ class Status(config.ReconfigurableServiceMixin, service.MultiService):
         d.addCallback(make_status_objects)
         return d
 
+    def getBuildset(self, bsid):
+        d = self.master.db.buildsets.getBuildset(bsid)
+        d.addCallback(buildset.BuildSetStatus, self)
+        return d
+
     def generateFinishedBuilds(self, builders=[], branches=[],
                                num_builds=None, finished_before=None,
                                max_search=200):

@@ -451,6 +451,15 @@ class StatusClientPerspective(base.StatusReceiverPerspective):
         """Ping method to allow pb clients to validate their connections."""
         return "pong"
 
+    def perspective_force(self, owner, schedulerName, **kwargs):
+        for sch in self.status.master.allSchedulers():
+            if schedulerName == sch.name:
+                d = sch.force(owner, **kwargs)
+                d.addCallback(lambda (bs,brs): bs)
+                d.addCallback(self.status.getBuildset)
+                d.addCallback(IRemote)
+                return d
+
     # IStatusReceiver methods, invoked if we've subscribed
 
     # mode >= builder
