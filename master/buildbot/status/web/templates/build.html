@@ -197,7 +197,21 @@ Build #{{ b.getNumber() }}
 
   {% if authz.advertiseAction('forceBuild', request) %}
     <h3>Resubmit Build:</h3>
-    {{ forms.rebuild_build(build_url+"/rebuild", authz, exactly, ss) }}
+    {% if not ss.branch or ss.branch == 'trunk' %}
+      {{ forms.rebuild_build(build_url+"/rebuild", authz, exactly, ss) }}
+    {% else %}
+      <form method="post" action="{{path_to_builder + "/force" }}" class="command rebuild">
+	<p>To rebuild the latest version of this branch, fill out the following fields and push the 'Force Build' button</p>
+	<div class="row">
+	  <span class="label">Reason for re-running build:</span>
+	  <input type='text' name='reason' />
+	</div>
+	<!-- Assume that if we are building non-trunk, then this is a force build -->
+	<input type='hidden' name='forcescheduler' value='{{b.getProperty("scheduler", "force-supported")}}' />
+	<input type='hidden' name='branch' value='{{ss.branch}}' />
+	<input type="submit" value="Force Build" />
+      </form>
+    {% endif %}
   {% endif %}
 
 </div>
