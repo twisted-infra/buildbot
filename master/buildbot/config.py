@@ -390,6 +390,9 @@ class MasterConfig(object):
 
 
     def load_builders(self, filename, config_dict, errors):
+       global _errors
+       _errors = errors
+       try:
         if 'builders' not in config_dict:
             return
         builders = config_dict['builders']
@@ -413,6 +416,8 @@ class MasterConfig(object):
             return
 
         self.builders = builders
+       finally:
+        _errors = None
 
 
     def load_slaves(self, filename, config_dict, errors):
@@ -598,20 +603,18 @@ class BuilderConfig:
             nextSlave=None, nextBuild=None, locks=None, env=None,
             properties=None, mergeRequests=None):
 
-        errors = ConfigErrors([])
-
         # name is required, and can't start with '_'
         if not name or type(name) not in (str, unicode):
-            errors.addError("builder's name is required")
+            error("builder's name is required")
             name = '<unknown>'
         elif name[0] == '_':
-            errors.addError(
+            error(
                 "builder names must not start with an underscore: '%s'" % name)
         self.name = name
 
         # factory is required
         if factory is None:
-            errors.addError("builder '%s' has no factory" % name)
+            error("builder '%s' has no factory" % name)
         self.factory = factory
 
         # slavenames can be a single slave name or a list, and should also
@@ -620,7 +623,7 @@ class BuilderConfig:
             slavenames = [ slavenames ]
         if slavenames:
             if not isinstance(slavenames, list):
-                errors.addError(
+                error(
                     "builder '%s': slavenames must be a list or a string" %
                         (name,))
         else:
@@ -628,11 +631,11 @@ class BuilderConfig:
 
         if slavename:
             if type(slavename) != str:
-                errors.addError(
+                error(
                     "builder '%s': slavename must be a string" % (name,))
             slavenames = slavenames + [ slavename ]
         if not slavenames:
-            errors.addError(
+            error(
                 "builder '%s': at least one slavename is required" % (name,))
 
         self.slavenames = slavenames
@@ -649,26 +652,22 @@ class BuilderConfig:
 
         # remainder are optional
         if category is not None and not isinstance(category, str):
-            errors.addError(
+            error(
                 "builder '%s': category must be a string" % (name,))
 
         self.category = category or ''
         self.nextSlave = nextSlave
         if nextSlave and not callable(nextSlave):
-            errors.addError('nextSlave must be a callable')
+            error('nextSlave must be a callable')
         self.nextBuild = nextBuild
         if nextBuild and not callable(nextBuild):
-            errors.addError('nextBuild must be a callable')
+            error('nextBuild must be a callable')
         self.locks = locks or []
         self.env = env or {}
         if not isinstance(self.env, dict):
-            errors.addError("builder's env must be a dictionary")
+            error("builder's env must be a dictionary")
         self.properties = properties or {}
         self.mergeRequests = mergeRequests
-
-        if errors:
-            raise errors
-
 
     def getConfigDict(self):
         # note: this method will disappear eventually - put your smarts in the
