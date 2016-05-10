@@ -13,21 +13,15 @@
 #
 # Copyright Buildbot Team Members
 
-#!/usr/bin/env python
-"""
-github_buildbot.py is based on git_buildbot.py
-
-github_buildbot.py will determine the repository information from the JSON 
-HTTP POST it receives from github.com and build the appropriate repository.
-If your github repository is private, you must add a ssh key to the github
-repository for the user who initiated the build on the buildslave.
-
-"""
-
+import hmac
+import logging
 import re
-import datetime
+import warnings
+
+from hashlib import sha1
+
+from dateutil.parser import parse as dateparse
 from twisted.python import log
-import calendar
 
 try:
     import json
@@ -35,113 +29,203 @@ try:
 except ImportError:
     import simplejson as json
 
-# python is silly about how it handles timezones
-class fixedOffset(datetime.tzinfo):
-    """
-    fixed offset timezone
-    """
-    def __init__(self, minutes, hours, offsetSign = 1):
-        self.minutes = int(minutes) * offsetSign
-        self.hours   = int(hours)   * offsetSign
-        self.offset  = datetime.timedelta(minutes = self.minutes,
-                                         hours   = self.hours)
+_HEADER_CT = 'Content-Type'
+_HEADER_EVENT = 'X-GitHub-Event'
+_HEADER_SIGNATURE = 'X-Hub-Signature'
 
-    def utcoffset(self, dt):
-        return self.offset
 
-    def dst(self, dt):
-        return datetime.timedelta(0)
-    
-def convertTime(myTestTimestamp):
-    #"1970-01-01T00:00:00+00:00"
-    matcher = re.compile(r'(\d\d\d\d)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([-+])(\d\d):(\d\d)')
-    result  = matcher.match(myTestTimestamp)
-    (year, month, day, hour, minute, second, offsetsign, houroffset, minoffset) = \
-        result.groups()
-    if offsetsign == '+':
-        offsetsign = 1
-    else:
-        offsetsign = -1
-    
-    offsetTimezone = fixedOffset( minoffset, houroffset, offsetsign )
-    myDatetime = datetime.datetime( int(year),
-                                    int(month),
-                                    int(day),
-                                    int(hour),
-                                    int(minute),
-                                    int(second),
-                                    0,
-                                    offsetTimezone)
-    return calendar.timegm( myDatetime.utctimetuple() )
+class GitHubEventHandler(object):
+    def __init__(self, secret, strict, codebase=None):
+        self._secret = secret
+        self._strict = strict
+        self._codebase = codebase
 
-def getChanges(request, options = None):
-        """
-        Reponds only to POST events and starts the build process
-        
-        :arguments:
-            request
-                the http request object
-        """
-        payload = json.loads(request.args['payload'][0])
-        user = payload['repository']['owner']['name']
+        if self._strict and not self._secret:
+            raise ValueError('Strict mode is requested '
+                             'while no secret is provided')
+
+    def process(self, request):
+        payload = self._get_payload(request)
+
+        event_type = request.getHeader(_HEADER_EVENT)
+        log.msg("X-GitHub-Event: %r" % (event_type,), logLevel=logging.DEBUG)
+
+        handler = getattr(self, 'handle_%s' % event_type, None)
+
+        if handler is None:
+            raise ValueError('Unknown event: %r' % (event_type,))
+
+        return handler(payload)
+
+    def _get_payload(self, request):
+        content = request.content.read()
+
+        signature = request.getHeader(_HEADER_SIGNATURE)
+
+        if not signature and self._strict:
+            raise ValueError('Request has no required signature')
+
+        if self._secret and signature:
+            try:
+                hash_type, hexdigest = signature.split('=')
+            except ValueError:
+                raise ValueError('Wrong signature format: %r' % (signature,))
+
+            if hash_type != 'sha1':
+                raise ValueError('Unknown hash type: %s' % (hash_type,))
+
+            mac = hmac.new(self._secret, msg=content, digestmod=sha1)
+            # NOTE: hmac.compare_digest should be used, but it's only available
+            # starting Python 2.7.7
+            if mac.hexdigest() != hexdigest:
+                raise ValueError('Hash mismatch')
+
+        content_type = request.getHeader(_HEADER_CT)
+
+        if content_type == 'application/json':
+            payload = json.loads(content)
+        elif content_type == 'application/x-www-form-urlencoded':
+            payload = json.loads(request.args['payload'][0])
+        else:
+            raise ValueError('Unknown content type: %r' % (content_type,))
+
+        log.msg("Payload: %r" % payload, logLevel=logging.DEBUG)
+
+        return payload
+
+    def handle_ping(self, _):
+        return [], 'git'
+
+    def handle_push(self, payload):
+        # This field is unused:
+        user = None
+        # user = payload['pusher']['name']
         repo = payload['repository']['name']
         repo_url = payload['repository']['url']
-        project = request.args.get('project', None)
-        if project:
-            project = project[0]
-        elif project is None:
-            project = ''
-        # This field is unused:
-        #private = payload['repository']['private']
-        changes = process_change(payload, user, repo, repo_url, project)
-        log.msg("Received %s changes from github" % len(changes))
-        return (changes, 'git')
+        # NOTE: what would be a reasonable value for project?
+        # project = request.args.get('project', [''])[0]
+        project = payload['repository']['full_name']
 
-def process_change(payload, user, repo, repo_url, project):
+        changes = self._process_change(payload, user, repo, repo_url, project)
+
+        log.msg("Received %d changes from github" % len(changes))
+
+        return changes, 'git'
+
+    def handle_pull_request(self, payload):
+        changes = []
+        number = payload['number']
+        refname = 'refs/pull/%d/head' % (number,)
+        commits = payload['pull_request']['commits']
+
+        log.msg('Processing GitHub PR #%d' % number, logLevel=logging.DEBUG)
+
+        action = payload.get('action')
+        if action not in ('opened', 'reopened', 'synchronize'):
+            log.msg("GitHub PR #%d %s, ignoring" % (number, action))
+            return changes, 'git'
+
+        change = {
+            'revision': payload['pull_request']['head']['sha'],
+            'when_timestamp': dateparse(payload['pull_request']['created_at']),
+            'branch': refname,
+            'revlink': payload['pull_request']['_links']['html']['href'],
+            'repository': payload['repository']['clone_url'],
+            'category': 'pull',
+            # TODO: Get author name based on login id using txgithub module
+            'author': payload['sender']['login'],
+            'comments': 'GitHub Pull Request #%d (%d commit%s)' % (
+                number, commits, 's' if commits != 1 else ''),
+        }
+
+        if callable(self._codebase):
+            change['codebase'] = self._codebase(payload)
+        elif self._codebase is not None:
+            change['codebase'] = self._codebase
+
+        changes.append(change)
+
+        log.msg("Received %d changes from GitHub PR #%d" % (
+            len(changes), number))
+        return changes, 'git'
+
+    def _process_change(self, payload, user, repo, repo_url, project):
         """
         Consumes the JSON as a python object and actually starts the build.
-        
+
         :arguments:
             payload
                 Python Object that represents the JSON sent by GitHub Service
                 Hook.
         """
         changes = []
-        newrev = payload['after']
         refname = payload['ref']
 
         # We only care about regular heads, i.e. branches
         match = re.match(r"^refs\/heads\/(.+)$", refname)
         if not match:
             log.msg("Ignoring refname `%s': Not a branch" % refname)
-            return []
+            return changes
 
         branch = match.group(1)
-        if re.match(r"^0*$", newrev):
+        if payload.get('deleted'):
             log.msg("Branch `%s' deleted, ignoring" % branch)
-            return []
-        else: 
-            for commit in payload['commits']:
-                files = []
-                if 'added' in commit:
-                    files.extend(commit['added'])
-                if 'modified' in commit:
-                    files.extend(commit['modified'])
-                if 'removed' in commit:
-                    files.extend(commit['removed'])
-                when =  convertTime( commit['timestamp'])
-                log.msg("New revision: %s" % commit['id'][:8])
-                chdict = dict(
-                    who      = commit['author']['name'] 
-                                + " <" + commit['author']['email'] + ">",
-                    files    = files,
-                    comments = commit['message'], 
-                    revision = commit['id'],
-                    when     = when,
-                    branch   = branch,
-                    revlink  = commit['url'], 
-                    repository = repo_url,
-                    project  = project)
-                changes.append(chdict) 
             return changes
-        
+
+        for commit in payload['commits']:
+            if not commit.get('distinct', True):
+                log.msg('Commit `%s` is a non-distinct commit, ignoring...' %
+                        (commit['id'],))
+                continue
+
+            files = []
+            for kind in ('added', 'modified', 'removed'):
+                files.extend(commit.get(kind, []))
+
+            when_timestamp = dateparse(commit['timestamp'])
+
+            log.msg("New revision: %s" % commit['id'][:8])
+
+            change = {
+                'author': '%s <%s>' % (commit['author']['name'],
+                                       commit['author']['email']),
+                'files': files,
+                'comments': commit['message'],
+                'revision': commit['id'],
+                'when_timestamp': when_timestamp,
+                'branch': branch,
+                'revlink': commit['url'],
+                'repository': repo_url,
+                'project': project
+            }
+
+            if callable(self._codebase):
+                change['codebase'] = self._codebase(payload)
+            elif self._codebase is not None:
+                change['codebase'] = self._codebase
+
+            changes.append(change)
+
+        return changes
+
+
+def getChanges(request, options=None):
+    """
+    Responds only to POST events and starts the build process
+
+    :arguments:
+        request
+            the http request object
+    """
+    if options is None or (isinstance(options, bool) and options):
+        if options is not None:
+            warnings.warn('Use of True for GitHub hook is deprecated.  '
+                          'Please see the documentation for possible values')
+        options = {}
+
+    klass = options.get('class', GitHubEventHandler)
+
+    handler = klass(options.get('secret', None),
+                    options.get('strict', False),
+                    options.get('codebase', None))
+    return handler.process(request)
